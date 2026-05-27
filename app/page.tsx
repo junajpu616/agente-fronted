@@ -12,6 +12,7 @@ const crearIdMensaje = () => `${Date.now()}-${Math.random().toString(36).slice(2
 export default function PanelBiometrico() {
   const videoRef = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const reanudarVideoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [reporte, setReporte] = useState('Esperando a que el Agente escanee un objetivo...');
   
   // Nuevos estados para el chat
@@ -21,6 +22,7 @@ export default function PanelBiometrico() {
 
   const [ledUI, setLedUI] = useState(false); // Solo para que el botón cambie de color
   const ledEstado = useRef(false); // La memoria real para el teclado
+  const [videoPausado, setVideoPausado] = useState(false);
 
   // --- 1. CONTROLADORES DE TRACCIÓN ---
   const moverAgente = async (accion: string) => {
@@ -29,6 +31,26 @@ export default function PanelBiometrico() {
     await fetch(`http://${IP_AGENTE}:82/${accion}`, { mode: 'no-cors' }).catch((error) => {
       console.error('No se pudo enviar el comando al agente.', error);
     });
+  };
+
+  const pausarVideo = () => {
+    if (reanudarVideoTimeoutRef.current) {
+      clearTimeout(reanudarVideoTimeoutRef.current);
+      reanudarVideoTimeoutRef.current = null;
+    }
+
+    setVideoPausado(true);
+  };
+
+  const programarReanudacionVideo = () => {
+    if (reanudarVideoTimeoutRef.current) {
+      clearTimeout(reanudarVideoTimeoutRef.current);
+    }
+
+    reanudarVideoTimeoutRef.current = setTimeout(() => {
+      setVideoPausado(false);
+      reanudarVideoTimeoutRef.current = null;
+    }, 5000);
   };
 
   const capturarYAnalizar = useCallback(async () => {
@@ -80,6 +102,10 @@ export default function PanelBiometrico() {
       if (e.repeat) return; 
 
       const tecla = e.key.toLowerCase();
+      if (['w', 'a', 's', 'd'].includes(tecla)) {
+        pausarVideo();
+      }
+
       if (tecla === 'w') moverAgente('avanzar');
       if (tecla === 's') moverAgente('atras');
       if (tecla === 'a') moverAgente('izquierda');
@@ -96,6 +122,7 @@ export default function PanelBiometrico() {
       // Si la tecla que soltaste fue una de movimiento, manda a detener.
       if (['w', 'a', 's', 'd'].includes(tecla)) {
         moverAgente('detener');
+        programarReanudacionVideo();
       }
     };
 
@@ -107,6 +134,10 @@ export default function PanelBiometrico() {
     return () => {
       globalThis.removeEventListener('keydown', handleKeyDown);
       globalThis.removeEventListener('keyup', handleKeyUp);
+
+        if (reanudarVideoTimeoutRef.current) {
+          clearTimeout(reanudarVideoTimeoutRef.current);
+        }
     };
   }, [capturarYAnalizar]);
 
@@ -145,7 +176,7 @@ export default function PanelBiometrico() {
       
       {/* VIDEO */}
       <div className="flex justify-center mb-6">
-        {IP_AGENTE ? (
+        {IP_AGENTE && !videoPausado ? (
           <Image 
             ref={videoRef} src={`http://${IP_AGENTE}:81/stream`} crossOrigin="anonymous"
             alt="Transmisión en vivo del carrito"
@@ -153,7 +184,7 @@ export default function PanelBiometrico() {
           />
         ) : (
           <div className="flex h-120 w-160 items-center justify-center rounded-lg border-2 border-gray-700 bg-gray-800 text-sm text-gray-400">
-            Configura NEXT_PUBLIC_IP_AGENTE para ver la transmisión.
+            {IP_AGENTE ? 'Transmisión en pausa mientras el carrito se mueve...' : 'Configura NEXT_PUBLIC_IP_AGENTE para ver la transmisión.'}
           </div>
         )}
         <canvas ref={canvasRef} className="hidden" />
