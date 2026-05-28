@@ -24,13 +24,30 @@ export default function PanelBiometrico() {
   const ledEstado = useRef(false); // La memoria real para el teclado
   const [videoPausado, setVideoPausado] = useState(false);
 
-  // --- 1. CONTROLADORES DE TRACCIÓN ---
-  const moverAgente = async (accion: string) => {
+  // --- 1. CONTROLADORES DE TRACCIÓN (Con Detonador y Reintentos) ---
+  const moverAgente = async (accion: string, reintentos = 0) => {
     if (!IP_AGENTE) return;
 
-    await fetch(`http://${IP_AGENTE}:82/${accion}`, { mode: 'no-cors' }).catch((error) => {
-      console.error('No se pudo enviar el comando al agente.', error);
-    });
+    // Creamos una bomba de tiempo de 250ms
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 250);
+
+    try {
+      await fetch(`http://${IP_AGENTE}:82/${accion}`, { 
+        cache: 'no-store',
+        signal: controller.signal // Conectamos el detonador
+      });
+      clearTimeout(timeoutId); // Si el carrito respondió rápido, desactivamos la bomba
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+
+      if (accion === 'detener' && reintentos < 5) {
+        console.warn(`[-] Freno perdido. Reintento ${reintentos + 1}/5...`);
+        setTimeout(() => moverAgente('detener', reintentos + 1), 100);
+      } else if (accion === 'detener') {
+        console.error('[!] Abortando freno definitivo. ESP32 bloqueado.');
+      }
+    }
   };
 
   const pausarVideo = () => {
@@ -38,7 +55,9 @@ export default function PanelBiometrico() {
       clearTimeout(reanudarVideoTimeoutRef.current);
       reanudarVideoTimeoutRef.current = null;
     }
-
+    
+    // Matamos la conexión de red del video a la fuerza
+    if (videoRef.current) videoRef.current.src = ''; 
     setVideoPausado(true);
   };
 
@@ -102,9 +121,6 @@ export default function PanelBiometrico() {
       if (e.repeat) return; 
 
       const tecla = e.key.toLowerCase();
-      if (['w', 'a', 's', 'd'].includes(tecla)) {
-        pausarVideo();
-      }
 
       if (tecla === 'w') moverAgente('avanzar');
       if (tecla === 's') moverAgente('atras');
@@ -118,11 +134,9 @@ export default function PanelBiometrico() {
     const handleKeyUp = (e: KeyboardEvent) => {
       if (document.activeElement?.tagName === 'INPUT') return;
 
-      const tecla = e.key.toLowerCase();
-      // Si la tecla que soltaste fue una de movimiento, manda a detener.
+      const tecla = e.key.toLowerCase();      
       if (['w', 'a', 's', 'd'].includes(tecla)) {
-        moverAgente('detener');
-        programarReanudacionVideo();
+        moverAgente('detener');        
       }
     };
 
@@ -176,11 +190,13 @@ export default function PanelBiometrico() {
       
       {/* VIDEO */}
       <div className="flex justify-center mb-6">
-        {IP_AGENTE && !videoPausado ? (
-          <Image 
-            ref={videoRef} src={`http://${IP_AGENTE}:81/stream`} crossOrigin="anonymous"
+      {IP_AGENTE && !videoPausado ? (
+          <img 
+            ref={videoRef} 
+            src={`http://${IP_AGENTE}:81/stream`} 
+            crossOrigin="anonymous"
             alt="Transmisión en vivo del carrito"
-            className="border-2 border-gray-700 rounded-lg shadow-lg" width="640" height="480" unoptimized loading="eager"
+            className="border-2 border-gray-700 rounded-lg shadow-lg w-[640px] h-[480px] object-cover" 
           />
         ) : (
           <div className="flex h-120 w-160 items-center justify-center rounded-lg border-2 border-gray-700 bg-gray-800 text-sm text-gray-400">
