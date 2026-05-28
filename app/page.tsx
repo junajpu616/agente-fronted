@@ -1,5 +1,4 @@
 'use client';
-import Image from 'next/image';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 const IP_AGENTE = process.env.NEXT_PUBLIC_IP_AGENTE?.trim() ?? '';
@@ -22,7 +21,14 @@ export default function PanelBiometrico() {
 
   const [ledUI, setLedUI] = useState(false); // Solo para que el botón cambie de color
   const ledEstado = useRef(false); // La memoria real para el teclado
+  const [videoVolteado, setVideoVolteado] = useState(false); // Estado real del video (para la tecla V)
+  const videoVolteadoRef = useRef(false); // Referencia para mantener el estado del video volteado
   const [videoPausado, setVideoPausado] = useState(false);
+
+  // Estados de calibración óptica
+  const [brillo, setBrillo] = useState(0);
+  const [contraste, setContraste] = useState(0);
+  const [saturacion, setSaturacion] = useState(0);
 
   // --- 1. CONTROLADORES DE TRACCIÓN (Con Detonador y Reintentos) ---
   const moverAgente = async (accion: string, reintentos = 0) => {
@@ -50,15 +56,11 @@ export default function PanelBiometrico() {
     }
   };
 
-  const programarReanudacionVideo = () => {
-    if (reanudarVideoTimeoutRef.current) {
-      clearTimeout(reanudarVideoTimeoutRef.current);
-    }
-
-    reanudarVideoTimeoutRef.current = setTimeout(() => {
-      setVideoPausado(false);
-      reanudarVideoTimeoutRef.current = null;
-    }, 5000);
+  const ajustarLente = async (variable: string, valor: number) => {
+    if (!IP_AGENTE) return;
+    await fetch(`http://${IP_AGENTE}/control?var=${variable}&val=${valor}`, { mode: 'no-cors' }).catch((error) => {
+      console.error(`Error ajustando ${variable}`, error);
+    });
   };
 
   const capturarYAnalizar = useCallback(async () => {
@@ -100,6 +102,19 @@ export default function PanelBiometrico() {
     });
   };
 
+  const voltearVideo = async () => {
+    videoVolteadoRef.current = !videoVolteadoRef.current;
+    setVideoVolteado(videoVolteadoRef.current);
+
+    await fetch(`http://${IP_AGENTE}/control?var=vflip&val=${videoVolteadoRef.current ? 1 : 0}`, { mode: 'no-cors' }).catch((error) => {
+      console.error('Error al voltear el video', error);
+    });
+
+    await fetch(`http://${IP_AGENTE}/xclk?xclk=10`, { mode: 'no-cors' }).catch((error) => {
+      console.error('Error al reactivar el video después de voltear', error);
+    });
+  };
+
   useEffect(() => {
     // 1. EVENTO: CUANDO PRESIONAS LA TECLA
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -117,6 +132,7 @@ export default function PanelBiometrico() {
       if (tecla === 'd') moverAgente('derecha');
       if (tecla === 'f') capturarYAnalizar();
       if (tecla === 'l') toggleLed();
+      if (tecla === 'v') voltearVideo();
     };
 
     // 2. EVENTO: CUANDO SUELTAS LA TECLA
@@ -199,7 +215,7 @@ export default function PanelBiometrico() {
       <div className="flex justify-center gap-4 mb-4">
         <button 
           onClick={toggleLed}
-          className={`px-4 py-2 rounded font-bold border ${
+          className={`px-4 py-2 rounded font-bold border w-48 ${
             ledUI 
             ? 'bg-yellow-500 text-black border-yellow-400 shadow-[0_0_15px_rgba(234,179,8,0.5)]' 
             : 'bg-gray-800 text-gray-400 border-gray-600 hover:bg-gray-700'
@@ -207,6 +223,53 @@ export default function PanelBiometrico() {
         >
           {ledUI ? '🔦 Linterna ON (L)' : '🔦 Linterna OFF (L)'}
         </button>
+        <button 
+          onClick={voltearVideo}
+          className={`px-4 py-2 rounded font-bold border w-48 ${
+            videoVolteado 
+            ? 'bg-blue-600 text-white border-blue-400 shadow-[0_0_15px_rgba(37,99,235,0.5)]' 
+            : 'bg-gray-800 text-gray-400 border-gray-600 hover:bg-gray-700'
+          }`}
+        >
+          {videoVolteado ? '↕️ Visión Invertida (V)' : '↕️ Visión Normal (V)'}
+        </button>
+      </div>
+
+      {/* ¡NUEVO! PANEL DE CALIBRACIÓN ÓPTICA */}
+      <div className="bg-gray-800 p-4 rounded-lg border border-gray-700 shadow mb-4 max-w-4xl mx-auto">
+        <h5 className="text-gray-400 border-b border-gray-600 pb-2 mb-4 text-sm tracking-widest">🎛️ CALIBRACIÓN DEL SENSOR OV2640</h5>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+          <div className="flex flex-col">
+            <label className="text-xs text-gray-400 mb-2 flex justify-between">
+              <span>Brillo</span> <span className="text-blue-400 font-bold">{brillo}</span>
+            </label>
+            <input type="range" min="-2" max="2" value={brillo} 
+              onChange={(e) => setBrillo(Number(e.target.value))} 
+              onMouseUp={() => ajustarLente('brightness', brillo)}
+              onTouchEnd={() => ajustarLente('brightness', brillo)}
+              className="accent-blue-500 cursor-pointer" />
+          </div>
+          <div className="flex flex-col">
+            <label className="text-xs text-gray-400 mb-2 flex justify-between">
+              <span>Contraste</span> <span className="text-yellow-400 font-bold">{contraste}</span>
+            </label>
+            <input type="range" min="-2" max="2" value={contraste} 
+              onChange={(e) => setContraste(Number(e.target.value))} 
+              onMouseUp={() => ajustarLente('contrast', contraste)}
+              onTouchEnd={() => ajustarLente('contrast', contraste)}
+              className="accent-yellow-500 cursor-pointer" />
+          </div>
+          <div className="flex flex-col">
+            <label className="text-xs text-gray-400 mb-2 flex justify-between">
+              <span>Saturación</span> <span className="text-green-400 font-bold">{saturacion}</span>
+            </label>
+            <input type="range" min="-2" max="2" value={saturacion} 
+              onChange={(e) => setSaturacion(Number(e.target.value))} 
+              onMouseUp={() => ajustarLente('saturation', saturacion)}
+              onTouchEnd={() => ajustarLente('saturation', saturacion)}
+              className="accent-green-500 cursor-pointer" />
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
