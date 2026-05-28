@@ -50,17 +50,6 @@ export default function PanelBiometrico() {
     }
   };
 
-  const pausarVideo = () => {
-    if (reanudarVideoTimeoutRef.current) {
-      clearTimeout(reanudarVideoTimeoutRef.current);
-      reanudarVideoTimeoutRef.current = null;
-    }
-    
-    // Matamos la conexión de red del video a la fuerza
-    if (videoRef.current) videoRef.current.src = ''; 
-    setVideoPausado(true);
-  };
-
   const programarReanudacionVideo = () => {
     if (reanudarVideoTimeoutRef.current) {
       clearTimeout(reanudarVideoTimeoutRef.current);
