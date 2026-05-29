@@ -1,7 +1,8 @@
 'use client';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
 
 const IP_AGENTE = process.env.NEXT_PUBLIC_IP_AGENTE?.trim() ?? '';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ?? '';
 
 type Mensaje = { id: string; rol: 'Catedrático' | 'IA' | 'Sistema', msg: string };
 type SubmitLikeEvent = { preventDefault: () => void };
@@ -24,6 +25,17 @@ export default function PanelBiometrico() {
   const [videoVolteado, setVideoVolteado] = useState(false); // Estado real del video (para la tecla V)
   const videoVolteadoRef = useRef(false); // Referencia para mantener el estado del video volteado
   const [videoPausado, setVideoPausado] = useState(false);
+  const [stick, setStick] = useState({ x: 0, y: 0 });
+  const joystickRef = useRef<HTMLDivElement | null>(null);
+  const ultimaDireccionRef = useRef('');
+
+  const construirApiUrl = (ruta: string) => {
+    if (API_BASE_URL) return `${API_BASE_URL}${ruta}`;
+    if (typeof window !== 'undefined') {
+      return `${window.location.protocol}//${window.location.hostname}:4000${ruta}`;
+    }
+    return `http://127.0.0.1:4000${ruta}`;
+  };
 
   // Estados de calibración óptica
   const [brillo, setBrillo] = useState(0);
@@ -78,7 +90,7 @@ export default function PanelBiometrico() {
     const imagenBase64 = canvas.toDataURL('image/jpeg').split(',')[1];
 
     try {
-      const res = await fetch('http://127.0.0.1:4000/biometria/analizar', {
+      const res = await fetch(construirApiUrl('/biometria/analizar'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ imagen: imagenBase64 }),
@@ -113,6 +125,55 @@ export default function PanelBiometrico() {
     await fetch(`http://${IP_AGENTE}/xclk?xclk=10`, { mode: 'no-cors' }).catch((error) => {
       console.error('Error al reactivar el video después de voltear', error);
     });
+  };
+
+  const obtenerDireccionJoystick = (x: number, y: number) => {
+    const deadzone = 0.3;
+    if (Math.abs(x) < deadzone && Math.abs(y) < deadzone) return 'detener';
+    if (Math.abs(x) > Math.abs(y)) return x > 0 ? 'derecha' : 'izquierda';
+    return y > 0 ? 'atras' : 'avanzar';
+  };
+
+  const actualizarJoystick = (clientX: number, clientY: number) => {
+    const container = joystickRef.current;
+    if (!container) return;
+
+    const rect = container.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const dx = clientX - centerX;
+    const dy = clientY - centerY;
+    const max = rect.width / 2;
+    const normX = Math.max(-1, Math.min(1, dx / max));
+    const normY = Math.max(-1, Math.min(1, dy / max));
+
+    setStick({ x: normX, y: normY });
+
+    const direccion = obtenerDireccionJoystick(normX, normY);
+    if (direccion !== ultimaDireccionRef.current) {
+      ultimaDireccionRef.current = direccion;
+      if (direccion === 'detener') moverAgente('detener');
+      else moverAgente(direccion);
+    }
+  };
+
+  const handleJoystickStart = (e: PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    actualizarJoystick(e.clientX, e.clientY);
+  };
+
+  const handleJoystickMove = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.buttons === 0) return;
+    actualizarJoystick(e.clientX, e.clientY);
+  };
+
+  const handleJoystickEnd = (e: PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    setStick({ x: 0, y: 0 });
+    ultimaDireccionRef.current = '';
+    moverAgente('detener');
   };
 
   useEffect(() => {
@@ -173,7 +234,7 @@ export default function PanelBiometrico() {
     setChat(prev => [...prev, { id: crearIdMensaje(), rol: 'Catedrático', msg: preguntaTemp }]);
 
     try {
-      const res = await fetch('http://127.0.0.1:4000/biometria/preguntar', {
+      const res = await fetch(construirApiUrl('/biometria/preguntar'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ pregunta: preguntaTemp }),
@@ -212,7 +273,7 @@ export default function PanelBiometrico() {
       </div>
 
       {/* CONTROLES RÁPIDOS */}
-      <div className="flex justify-center gap-4 mb-4">
+      <div className="flex flex-col items-center gap-4 mb-4 md:flex-row md:justify-center">
         <button 
           onClick={toggleLed}
           className={`px-4 py-2 rounded font-bold border w-48 ${
@@ -224,6 +285,12 @@ export default function PanelBiometrico() {
           {ledUI ? '🔦 Linterna ON (L)' : '🔦 Linterna OFF (L)'}
         </button>
         <button 
+          onClick={capturarYAnalizar}
+          className="px-4 py-2 rounded font-bold border w-48 bg-green-600 text-white border-green-500 hover:bg-green-500"
+        >
+          📸 Tomar Foto (F)
+        </button>
+        <button 
           onClick={voltearVideo}
           className={`px-4 py-2 rounded font-bold border w-48 ${
             videoVolteado 
@@ -233,6 +300,35 @@ export default function PanelBiometrico() {
         >
           {videoVolteado ? '↕️ Visión Invertida (V)' : '↕️ Visión Normal (V)'}
         </button>
+      </div>
+
+      {/* JOYSTICK TÁCTIL */}
+      <div className="md:hidden bg-gray-800 p-4 rounded-lg border border-gray-700 shadow mb-4 max-w-4xl mx-auto">
+        <h5 className="text-gray-400 border-b border-gray-600 pb-2 mb-4 text-sm tracking-widest">🎮 Control Táctil</h5>
+        <div className="flex flex-col items-center gap-4">
+          <div
+            ref={joystickRef}
+            className="relative h-48 w-48 rounded-full border-2 border-gray-600 bg-gray-900/80 touch-none"
+            onPointerDown={handleJoystickStart}
+            onPointerMove={handleJoystickMove}
+            onPointerUp={handleJoystickEnd}
+            onPointerLeave={handleJoystickEnd}
+            style={{ touchAction: 'none' }}
+          >
+            <div
+              className="absolute left-1/2 top-1/2 h-16 w-16 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-500/80 shadow-lg"
+              style={{ transform: `translate(${stick.x * 40}px, ${stick.y * 40}px)` }}
+            />
+          </div>
+          <div className="space-y-2 text-sm text-gray-300 max-w-xs">
+            <p className="text-white">Arrastra dentro del círculo para mover el carrito.</p>
+            <p>↑ Avanza</p>
+            <p>↓ Retrocede</p>
+            <p>← Gira izquierda</p>
+            <p>→ Gira derecha</p>
+            <p className="text-xs text-gray-500">La dirección se envía mientras mantienes tocado el joystick.</p>
+          </div>
+        </div>
       </div>
 
       {/* ¡NUEVO! PANEL DE CALIBRACIÓN ÓPTICA */}
@@ -296,19 +392,19 @@ export default function PanelBiometrico() {
             </div>
           </div>
 
-          <form onSubmit={enviarPregunta} className="flex gap-2">
+          <form onSubmit={enviarPregunta} className="flex flex-col gap-2 sm:flex-row">
             <input 
               type="text" 
               value={inputPregunta}
               onChange={(e) => setInputPregunta(e.target.value)}
-              className="flex-1 bg-gray-900 text-white border border-gray-600 rounded px-3 py-2 outline-none focus:border-blue-500" 
+              className="w-full bg-gray-900 text-white border border-gray-600 rounded px-3 py-2 outline-none focus:border-blue-500" 
               placeholder="Hazle una pregunta a la IA sobre este sujeto..." 
               required autoComplete="off"
             />
             <button 
               type="submit" 
               disabled={cargando}
-              className={`px-4 py-2 rounded font-bold ${cargando ? 'bg-gray-600' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
+              className={`w-full sm:w-auto px-4 py-2 rounded font-bold ${cargando ? 'bg-gray-600' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
             >
               Consultar
             </button>
